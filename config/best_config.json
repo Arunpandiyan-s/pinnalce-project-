@@ -1,0 +1,65 @@
+{
+  "chunking_strategy": "recursive",
+  "embedding_model": "cohere",
+  "retrieval_strategy": "Dense",
+  "scores": {
+    "Hit@3": 0.913,
+    "MRR": 0.7754
+  },
+  "grid_results": [
+    {
+      "Chunking": "Fixed",
+      "Embedding": "bge",
+      "Hit@3": 0.7826,
+      "MRR": 0.6594
+    },
+    {
+      "Chunking": "Fixed",
+      "Embedding": "cohere",
+      "Hit@3": 0.913,
+      "MRR": 0.7609
+    },
+    {
+      "Chunking": "Recursive",
+      "Embedding": "bge",
+      "Hit@3": 0.7391,
+      "MRR": 0.6667
+    },
+    {
+      "Chunking": "Recursive",
+      "Embedding": "cohere",
+      "Hit@3": 0.913,
+      "MRR": 0.7754
+    },
+    {
+      "Chunking": "Semantic",
+      "Embedding": "bge",
+      "Hit@3": 0.6522,
+      "MRR": 0.5072
+    },
+    {
+      "Chunking": "Semantic",
+      "Embedding": "cohere",
+      "Hit@3": 0.8696,
+      "MRR": 0.6957
+    }
+  ],
+  "retrieval_results": [
+    {
+      "Strategy": "Dense",
+      "Hit@3": 0.913,
+      "MRR": 0.7754
+    },
+    {
+      "Strategy": "MMR",
+      "Hit@3": 0.8261,
+      "MRR": 0.7319
+    },
+    {
+      "Strategy": "Hybrid (BM25+Dense)",
+      "Hit@3": 0.8261,
+      "MRR": 0.7101
+    }
+  ],
+  "timestamp": "2026-09-02T07:23:47.180854+00:00"
+}

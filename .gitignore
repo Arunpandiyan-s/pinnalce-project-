@@ -1,0 +1,26 @@
+# API keys
+.env
+
+# Vector store (large binary files)
+chroma_db/
+
+# Source PDFs (add your own to data/papers/)
+data/papers/*.pdf
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+
+# Generated config (committed after first build so reviewers can see results)
+# config/best_config.json   ← un-comment to exclude
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# Virtual environment
+.venv/
+venv/
+env/
+ENV/

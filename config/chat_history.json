@@ -1,0 +1,31 @@
+[
+  {
+    "role": "user",
+    "content": "what is agentic rag",
+    "sources": [],
+    "web_sources": [],
+    "source_type": "llm",
+    "timestamp": "2026-09-02T07:25:26.753921+00:00"
+  },
+  {
+    "role": "assistant",
+    "content": "Agentic RAG (Agentic Retrieval-Augmented Generation) is a paradigm shift that introduces autonomous agents capable of dynamic decision-making and workflow optimization. It embeds these autonomous AI agents into the RAG pipeline, allowing them to dynamically manage retrieval strategies and iteratively refine contextual understanding.\n\nUnlike traditional RAG systems with static workflows, Agentic RAG employs iterative refinement and adaptive retrieval strategies. These agents leverage design patterns such as reflection, planning, tool use, and multi-agent collaboration. This approach overcomes the inherent constraints of earlier paradigms, enabling more complex, multi-domain tasks to be addressed with enhanced precision and contextual understanding.",
+    "sources": [
+      {
+        "paper_title": "Research Papers Capstone",
+        "page_number": 6
+      },
+      {
+        "paper_title": "Research Papers Capstone",
+        "page_number": 8
+      },
+      {
+        "paper_title": "Research Papers Capstone",
+        "page_number": 1
+      }
+    ],
+    "web_sources": [],
+    "source_type": "papers",
+    "timestamp": "2026-09-02T07:25:26.754023+00:00"
+  }
+]
