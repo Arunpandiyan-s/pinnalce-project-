@@ -104,7 +104,8 @@ def run_pipeline(pdf_dir=None, persist_dir=None, collection_name=None,
             logger.info(f"  Embedding: {strategy_name} + {emb_key} ({len(chunks)} chunks)…")
             if emb_key == "cohere":
                 embeddings = embed_documents_rate_limited(
-                    emb_model, texts, batch_size=40, cooldown=20
+                    emb_model, texts, batch_size=40
+                    # cooldown=20 triggers only on actual 429 errors (adaptive)
                 )
             else:
                 embeddings = emb_model.embed_documents(texts)

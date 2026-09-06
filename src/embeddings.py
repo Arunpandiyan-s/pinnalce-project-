@@ -57,20 +57,32 @@ def embed_documents_rate_limited(
     texts: list[str],
     batch_size: int = 40,
     cooldown: float = 20,
+    inter_batch_delay: float = 1.0,
     max_retries: int = 4,
 ) -> list[list[float]]:
     """
-    Embed *texts* in fixed-size batches with a cooldown sleep between batches.
+    Embed *texts* in fixed-size batches with adaptive rate-limit handling.
 
-    On a 429 / "rate limit" error the batch is retried up to *max_retries*
-    times with exponential back-off (cooldown × 2^attempt seconds).
+    Strategy:
+      - A small ``inter_batch_delay`` (default 1 s) is used between every batch
+        to be polite to the API without wasting time.
+      - The large ``cooldown`` sleep is only triggered when a 429 / rate-limit
+        error is *actually received*, with exponential back-off on retries
+        (cooldown × 2^attempt seconds).
+
+    This is much faster than the old fixed-cooldown approach: for 26 batches the
+    old code slept ≈ 26 × 20 s = 8+ minutes unconditionally; now it sleeps only
+    ≈ 26 × 1 s = 26 seconds unless the API actually complains.
 
     Args:
-        embedding_model: Any LangChain embeddings instance.
-        texts:           Flat list of strings to embed.
-        batch_size:      Number of texts per API call (default 40).
-        cooldown:        Seconds to sleep between successful batches (default 20).
-        max_retries:     Maximum retry attempts per batch on rate-limit errors.
+        embedding_model:   Any LangChain embeddings instance.
+        texts:             Flat list of strings to embed.
+        batch_size:        Number of texts per API call (default 40).
+        cooldown:          Seconds to wait after a 429 before retrying
+                           (also the base for exponential back-off, default 20).
+        inter_batch_delay: Small polite pause between successful batches
+                           (default 1 s). Set to 0 to disable.
+        max_retries:       Maximum retry attempts per batch on rate-limit errors.
 
     Returns:
         Combined list of embedding vectors in the same order as *texts*.
@@ -104,10 +116,10 @@ def embed_documents_rate_limited(
                 else:
                     raise  # non-rate-limit error, or retries exhausted
 
-        # Sleep between batches (skip after the last one)
-        if batch_idx < total_batches - 1:
-            logger.info(f"    Cooldown {cooldown}s before next batch…")
-            time.sleep(cooldown)
+        # Small polite pause between batches (skip after the last one)
+        if batch_idx < total_batches - 1 and inter_batch_delay > 0:
+            logger.debug(f"    Inter-batch delay {inter_batch_delay}s…")
+            time.sleep(inter_batch_delay)
 
     logger.info(
         f"  embed_documents_rate_limited: done — {len(all_embeddings)} embeddings total"

@@ -65,6 +65,7 @@ def chat(
     llm = None,
     vectorstore = None,
     threshold: float = 0.50,
+    selected_papers: list | None = None,
 ) -> dict:
     """
     Run one turn of the conversational chain with adaptive 3-tier retrieval,
@@ -78,6 +79,8 @@ def chat(
         llm: ChatModel instance for answer synthesis
         vectorstore: optional Chroma vectorstore to evaluate relevance scores
         threshold: minimum relevance score (default 0.50)
+        selected_papers: optional list of paper_title strings to restrict retrieval to.
+                         If None or empty, all documents are searched.
 
     Returns:
         {
@@ -97,11 +100,25 @@ def chat(
         api_key = os.getenv("GOOGLE_API_KEY", "")
         llm = ChatGoogleGenerativeAI(model=config.LLM_MODEL, temperature=config.LLM_TEMP, google_api_key=api_key)
 
-    # ── 1. Evaluate vector search relevance ──────────────────────────────────
+    # ── 1. Build optional document filter ─────────────────────────────────────
+    # Chroma where-filter restricts search to selected paper titles only.
+    where_filter = None
+    if selected_papers:
+        if len(selected_papers) == 1:
+            where_filter = {"paper_title": selected_papers[0]}
+        else:
+            where_filter = {"paper_title": {"$in": selected_papers}}
+        logger.info(f"Document filter active: {selected_papers}")
+
+    # ── 2. Evaluate vector search relevance ──────────────────────────────────
     valid_paper_docs = []
     if vectorstore is not None:
         try:
-            results = vectorstore.similarity_search_with_relevance_scores(question, k=config.TOP_K)
+            results = vectorstore.similarity_search_with_relevance_scores(
+                question,
+                k=config.TOP_K,
+                filter=where_filter if where_filter else None,
+            )
             valid_paper_docs = [doc for doc, score in results if score >= threshold]
             logger.info(
                 f"Vector relevance check: {len(valid_paper_docs)}/{len(results)} chunks above threshold {threshold}"
