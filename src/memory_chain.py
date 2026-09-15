@@ -102,13 +102,19 @@ def chat(
 
     # ── 1. Build optional document filter ─────────────────────────────────────
     # Chroma where-filter restricts search to selected paper titles only.
+    # Normalize titles (collapse extra spaces) to match what's stored in ChromaDB.
+    import re as _re
+    def _norm(t: str) -> str:
+        return _re.sub(r" +", " ", t.replace("_", " ").replace("-", " ")).strip().title()
+
     where_filter = None
     if selected_papers:
-        if len(selected_papers) == 1:
-            where_filter = {"paper_title": selected_papers[0]}
+        normalized = [_norm(t) for t in selected_papers]
+        if len(normalized) == 1:
+            where_filter = {"paper_title": normalized[0]}
         else:
-            where_filter = {"paper_title": {"$in": selected_papers}}
-        logger.info(f"Document filter active: {selected_papers}")
+            where_filter = {"paper_title": {"$in": normalized}}
+        logger.info(f"Document filter active (normalized): {normalized}")
 
     # ── 2. Evaluate vector search relevance ──────────────────────────────────
     valid_paper_docs = []
@@ -119,6 +125,12 @@ def chat(
                 k=config.TOP_K,
                 filter=where_filter if where_filter else None,
             )
+            # Log each chunk score for debugging
+            for doc, score in results:
+                t = doc.metadata.get("paper_title", "?")
+                p = doc.metadata.get("page_number", "?")
+                status = "PASS" if score >= threshold else f"FILTERED (< {threshold})"
+                logger.info(f"  Chunk score={score:.4f} [{status}] paper={t!r} page={p}")
             valid_paper_docs = [doc for doc, score in results if score >= threshold]
             logger.info(
                 f"Vector relevance check: {len(valid_paper_docs)}/{len(results)} chunks above threshold {threshold}"

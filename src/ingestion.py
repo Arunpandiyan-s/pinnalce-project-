@@ -30,10 +30,13 @@ def discover_pdfs(pdf_dir: Path) -> list[dict]:
     sources = []
     for i, pdf_path in enumerate(sorted(pdf_dir.glob("*.pdf")), start=1):
         stem = pdf_path.stem
+        import re as _re
+        # Normalize: replace underscores/hyphens, collapse any multiple spaces to one
+        title = _re.sub(r" +", " ", stem.replace("_", " ").replace("-", " ")).strip().title()
         sources.append({
             "path": str(pdf_path),
             "document_id": f"paper_{i:03d}",
-            "paper_title": stem.replace("_", " ").replace("-", " ").title(),
+            "paper_title": title,
         })
     logger.debug(f"Discovered {len(sources)} PDF(s) in {pdf_dir}")
     return sources

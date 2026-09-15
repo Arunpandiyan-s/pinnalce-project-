@@ -26,7 +26,9 @@ CHUNK_OVERLAP = 100
 TOP_K                = 3
 MMR_FETCH_K          = 10
 MMR_LAMBDA           = 0.5
-SIMILARITY_THRESHOLD = 0.50  # minimum relevance score to consider a paper chunk relevant
+SIMILARITY_THRESHOLD = 0.20  # Cohere embeddings return scores in 0.20-0.70 range;
+                             # 0.50 was too high and silently filtered all results.
+                             # Lower threshold to 0.20 so relevant paper chunks pass through.
 
 # ── Embedding models (key → HuggingFace repo id) ─────────────────────────────
 EMBEDDING_MODELS = {

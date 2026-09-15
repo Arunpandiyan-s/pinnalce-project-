@@ -220,8 +220,10 @@ def _get_indexed_documents() -> list[dict]:
         return []
     docs = []
     for pdf_path in sorted(config.PDF_DIR.glob("*.pdf")):
+        import re as _re
         stem = pdf_path.stem
-        title = stem.replace("_", " ").replace("-", " ").title()
+        # Same normalization as ingestion.py: collapse multiple spaces to one
+        title = _re.sub(r" +", " ", stem.replace("_", " ").replace("-", " ")).strip().title()
         # Count pages quickly using PyPDF
         pages = "?"
         try:
