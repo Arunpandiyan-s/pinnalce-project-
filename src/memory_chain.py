@@ -65,7 +65,6 @@ def chat(
     llm = None,
     vectorstore = None,
     threshold: float = 0.50,
-    selected_papers: list | None = None,
 ) -> dict:
     """
     Run one turn of the conversational chain with adaptive 3-tier retrieval,
@@ -78,9 +77,8 @@ def chat(
         use_web_search: whether to fetch live web search results from Tavily
         llm: ChatModel instance for answer synthesis
         vectorstore: optional Chroma vectorstore to evaluate relevance scores
-        threshold: minimum relevance score (default 0.50)
-        selected_papers: optional list of paper_title strings to restrict retrieval to.
-                         If None or empty, all documents are searched.
+        threshold: minimum relevance score (default 0.50) — chunks below this
+                   score are excluded; if none pass, falls back to web/LLM tier.
 
     Returns:
         {
@@ -100,30 +98,15 @@ def chat(
         api_key = os.getenv("GOOGLE_API_KEY", "")
         llm = ChatGoogleGenerativeAI(model=config.LLM_MODEL, temperature=config.LLM_TEMP, google_api_key=api_key)
 
-    # ── 1. Build optional document filter ─────────────────────────────────────
-    # Chroma where-filter restricts search to selected paper titles only.
-    # Normalize titles (collapse extra spaces) to match what's stored in ChromaDB.
-    import re as _re
-    def _norm(t: str) -> str:
-        return _re.sub(r" +", " ", t.replace("_", " ").replace("-", " ")).strip().title()
-
-    where_filter = None
-    if selected_papers:
-        normalized = [_norm(t) for t in selected_papers]
-        if len(normalized) == 1:
-            where_filter = {"paper_title": normalized[0]}
-        else:
-            where_filter = {"paper_title": {"$in": normalized}}
-        logger.info(f"Document filter active (normalized): {normalized}")
-
-    # ── 2. Evaluate vector search relevance ──────────────────────────────────
+    # ── 1. Evaluate vector search relevance (threshold gate) ─────────────────
+    # All indexed documents are searched; only chunks scoring >= threshold are
+    # accepted. This drives the 3-tier fallback (papers → web → LLM).
     valid_paper_docs = []
     if vectorstore is not None:
         try:
             results = vectorstore.similarity_search_with_relevance_scores(
                 question,
                 k=config.TOP_K,
-                filter=where_filter if where_filter else None,
             )
             # Log each chunk score for debugging
             for doc, score in results:
@@ -158,13 +141,17 @@ def chat(
     has_web_matches = len(web_results) > 0
 
     # ── 3. Determine Source Attribution Tier & Generate Answer ───────────────
-    paper_sources = [
-        {
-            "paper_title": d.metadata.get("paper_title", "Unknown"),
-            "page_number": d.metadata.get("page_number", "?"),
-        }
-        for d in valid_paper_docs
-    ]
+    # Deduplicate by (paper_title, page_number) — multiple chunks from same page
+    # should only produce one source entry, preserving retrieval order.
+    _seen: dict = {}
+    for d in valid_paper_docs:
+        title = d.metadata.get("paper_title", "Unknown")
+        page  = d.metadata.get("page_number", "?")
+        key   = (title, page)
+        if key not in _seen:
+            _seen[key] = {"paper_title": title, "page_number": page}
+    paper_sources = list(_seen.values())
+
 
     from src.web_search import format_web_context
 

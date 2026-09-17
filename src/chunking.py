@@ -24,6 +24,11 @@ def fixed_chunk(
     )
     chunks = splitter.split_documents(documents)
     for i, chunk in enumerate(chunks):
+        # LangChain splitters copy the PyPDFLoader 'page' key (0-indexed) into
+        # chunk metadata. Re-derive page_number (1-indexed) from it when present.
+        raw_page = chunk.metadata.get("page")
+        if raw_page is not None:
+            chunk.metadata["page_number"] = int(raw_page) + 1
         chunk.metadata["chunk_id"] = f"fixed_chunk_{i}"
         chunk.metadata["chunking_strategy"] = "fixed"
     logger.info(f"Fixed chunks: {len(chunks)}")
@@ -44,6 +49,10 @@ def recursive_chunk(
     )
     chunks = splitter.split_documents(documents)
     for i, chunk in enumerate(chunks):
+        # Re-derive page_number (1-indexed) from the splitter's raw 'page' key (0-indexed)
+        raw_page = chunk.metadata.get("page")
+        if raw_page is not None:
+            chunk.metadata["page_number"] = int(raw_page) + 1
         chunk.metadata["chunk_id"] = f"recursive_chunk_{i}"
         chunk.metadata["chunking_strategy"] = "recursive"
     logger.info(f"Recursive chunks: {len(chunks)}")
@@ -62,11 +71,15 @@ def semantic_chunk(
 
     page_counter: dict = defaultdict(int)
     for chunk in chunks:
+        # Re-derive page_number (1-indexed) from the splitter's raw 'page' key when present
+        raw_page = chunk.metadata.get("page")
+        if raw_page is not None:
+            chunk.metadata["page_number"] = int(raw_page) + 1
         page = chunk.metadata.get("page_number", 0)
         page_counter[page] += 1
         doc_id = chunk.metadata.get("document_id", "doc")
         chunk.metadata["chunk_id"] = (
-            f"{doc_id}_page_{page:03d}_chunk_{page_counter[page]:03d}"
+            f"{doc_id}_page_{str(page).zfill(3)}_chunk_{str(page_counter[page]).zfill(3)}"
         )
         chunk.metadata["chunking_strategy"] = "semantic"
     logger.info(f"Semantic chunks: {len(chunks)}")

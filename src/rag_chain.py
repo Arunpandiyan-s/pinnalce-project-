@@ -3,6 +3,14 @@ src/rag_chain.py — Single-turn RAG chain with consistent source citations (not
 
 ask() is used identically by scripts/evaluate.py and app.py so citation
 behaviour is always consistent, not duplicated.
+
+Compare mode
+------------
+Pass ``compare_mode=True`` to ``ask()`` to get a side-by-side comparison of
+Dense / MMR / Hybrid retrieval results for the same query, returned under the
+``"comparison"`` key.  The normal answer (default strategy) is still generated
+and returned at the top level.  No new embedding API calls are made — all three
+strategies run against the already-persisted Chroma index.
 """
 import logging
 from langchain_core.prompts import ChatPromptTemplate
@@ -62,7 +70,10 @@ def ask(
     question: str,
     k: int = 3,
     use_web_search: bool = False,
-    llm = None,
+    llm=None,
+    compare_mode: bool = False,
+    generate_per_strategy_answers: bool = False,
+    vectorstore=None,
 ) -> dict:
     """
     Run the RAG chain and return a structured response with answer, paper sources, and web sources.
@@ -74,13 +85,38 @@ def ask(
         k: number of source documents to include
         use_web_search: whether to search Tavily for web sources
         llm: optional LLM model for synthesis when web search is enabled
+        compare_mode: when True, runs all three retrieval strategies against the
+            already-built vectorstore and returns per-strategy chunks + timing
+            under the "comparison" key.  No new embedding API calls are made.
+            The normal final answer (from the configured default retriever) is
+            still generated and returned at the top level.
+        generate_per_strategy_answers: when True (and compare_mode=True), also
+            generates one short LLM answer per strategy using that strategy's
+            retrieved chunks as context.  This triggers 3× LLM calls instead of
+            1 — opt-in only.  Ignored when compare_mode=False.
+        vectorstore: the Chroma vectorstore instance, required when
+            compare_mode=True so that live_compare_retrieval_strategies() can
+            build BM25 corpus and do ANN lookups without any API calls.
 
     Returns:
-        {
-            "answer": str,
-            "sources": [{"paper_title": str, "page_number": int}, ...],
-            "web_sources": [{"title": str, "url": str, "content": str}, ...]
-        }
+        When compare_mode=False (default)::
+
+            {
+                "answer": str,
+                "sources": [{"paper_title": str, "page_number": int, "chunk_id": str}, ...],
+                "web_sources": [{"title": str, "url": str, "content": str}, ...],
+            }
+
+        When compare_mode=True, the dict also contains::
+
+            "comparison": {
+                "dense":  {"chunks": [...], "elapsed_s": float, "answer": str | None},
+                "mmr":    {"chunks": [...], "elapsed_s": float, "answer": str | None},
+                "hybrid": {"chunks": [...], "elapsed_s": float, "answer": str | None},
+            }
+
+        Each chunk dict: {"content": str, "paper_title": str, "page_number": str|int,
+        "score": float | None}
     """
     docs = retriever.invoke(question)[:k] if retriever else []
     web_sources = []
@@ -121,4 +157,47 @@ def ask(
     logger.debug(
         f"Q: {question[:60]}… → {len(sources)} paper sources, {len(web_sources)} web sources cited"
     )
-    return {"answer": answer, "sources": sources, "web_sources": web_sources}
+
+    result = {"answer": answer, "sources": sources, "web_sources": web_sources}
+
+    # ── Compare mode: live per-strategy retrieval (no embedding calls) ─────────
+    if compare_mode and vectorstore is not None:
+        from src.retrieval import live_compare_retrieval_strategies
+        logger.info("compare_mode=True — running live retrieval strategy comparison")
+
+        comparison = live_compare_retrieval_strategies(question, vectorstore, k=k)
+
+        if generate_per_strategy_answers and llm is not None:
+            # Opt-in: generate one short answer per strategy (3× LLM calls)
+            _per_strategy_prompt = ChatPromptTemplate.from_template(
+                "You are a research assistant. Using ONLY the context below, answer the question "
+                "in 2-3 sentences.\n\nContext:\n{context}\n\nQuestion: {question}\n\nAnswer:"
+            )
+            for strategy_name, strategy_data in comparison.items():
+                chunks = strategy_data["chunks"]
+                if chunks:
+                    ctx_text = "\n\n".join(
+                        f"[{c['paper_title']}, p.{c['page_number']}]\n{c['content']}"
+                        for c in chunks
+                    )
+                    try:
+                        per_ans = (
+                            _per_strategy_prompt
+                            | llm
+                            | StrOutputParser()
+                        ).invoke({"context": ctx_text, "question": question})
+                    except Exception as exc:
+                        logger.warning(f"Per-strategy answer ({strategy_name}) failed: {exc}")
+                        per_ans = None
+                else:
+                    per_ans = None
+                comparison[strategy_name]["answer"] = per_ans
+        else:
+            # No per-strategy answers — set answer=None on each strategy
+            for strategy_data in comparison.values():
+                strategy_data["answer"] = None
+
+        result["comparison"] = comparison
+        logger.info("compare_mode: comparison data added to result")
+
+    return result

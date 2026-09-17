@@ -15,6 +15,7 @@ import os
 import sys
 from pathlib import Path
 import streamlit as st
+import streamlit.components.v1 as components
 from dotenv import load_dotenv
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -94,7 +95,7 @@ def _run_indexing_pipeline(uploaded_files, log_container) -> dict:
 
         from src.ingestion import discover_pdfs, load_and_clean_pdfs
         from src.chunking import get_all_chunking_strategies
-        from src.embeddings import get_embedding_model
+        from src.embeddings import get_embedding_model, embed_documents_rate_limited
         from src.evaluation import evaluation_questions, evaluate_chunking_strategy
         from src.vectorstore import build_vectorstore
         from src.retrieval import (
@@ -132,7 +133,10 @@ def _run_indexing_pipeline(uploaded_files, log_container) -> dict:
             texts = [c.page_content for c in chunks]
             for emb_key, emb_model in embedding_models.items():
                 logger.info(f"  Evaluating: {strategy_name} + {emb_key}...")
-                embeddings = emb_model.embed_documents(texts)
+                if emb_key == "cohere":
+                    embeddings = embed_documents_rate_limited(emb_model, texts, batch_size=40)
+                else:
+                    embeddings = emb_model.embed_documents(texts)
                 metrics = evaluate_chunking_strategy(
                     chunks, embeddings, evaluation_questions, emb_model, k=config.TOP_K
                 )
@@ -273,6 +277,12 @@ if "uploaded_hash" not in st.session_state:
 if "selected_papers" not in st.session_state:
     st.session_state.selected_papers = None  # None = all papers
 
+if "compare_mode" not in st.session_state:
+    st.session_state.compare_mode = False
+
+if "generate_per_strategy_answers" not in st.session_state:
+    st.session_state.generate_per_strategy_answers = False
+
 
 # =============================================================================
 # SIDEBAR
@@ -286,7 +296,7 @@ with st.sidebar:
     st.subheader("Chat Sessions")
 
     # New Chat button
-    if st.button("+ New Chat", use_container_width=True, type="primary"):
+    if st.button("+ New Chat", width="stretch", type="primary"):
         new_id = hist.create_session(st.session_state.session_store, "New Chat")
         st.session_state.active_session_id = new_id
         st.session_state.session_store["active_session"] = new_id
@@ -334,7 +344,7 @@ with st.sidebar:
             st.button(
                 btn_label,
                 key=f"sess_{sid}",
-                use_container_width=True,
+                width="stretch",
                 help=f"{msg_count // 2} turn(s)",
                 on_click=_switch,
             )
@@ -349,50 +359,6 @@ with st.sidebar:
             )
 
     st.divider()
-
-    # ── Indexed Documents (filter) ────────────────────────────────────────────
-    indexed_docs = _get_indexed_documents()
-    if indexed_docs and config.BEST_CONFIG_PATH.exists():
-        st.subheader("Indexed Documents")
-        st.caption("Select which papers to search:")
-
-        all_titles = [d["title"] for d in indexed_docs]
-
-        # Default: all selected
-        if st.session_state.selected_papers is None:
-            st.session_state.selected_papers = all_titles.copy()
-
-        col_all, col_none = st.columns(2)
-        with col_all:
-            if st.button("Select All", use_container_width=True):
-                st.session_state.selected_papers = all_titles.copy()
-                # Force-update each individual checkbox widget state
-                for doc in indexed_docs:
-                    st.session_state[f"doc_{doc['filename']}"] = True
-                st.rerun()
-        with col_none:
-            if st.button("Deselect All", use_container_width=True):
-                st.session_state.selected_papers = []
-                # Force-update each individual checkbox widget state
-                for doc in indexed_docs:
-                    st.session_state[f"doc_{doc['filename']}"] = False
-                st.rerun()
-
-        new_selection = []
-        for doc in indexed_docs:
-            checked = doc["title"] in st.session_state.selected_papers
-            if st.checkbox(
-                f"{doc['title']}  ({doc['pages']} pages)",
-                value=checked,
-                key=f"doc_{doc['filename']}",
-            ):
-                new_selection.append(doc["title"])
-        st.session_state.selected_papers = new_selection
-
-        if not new_selection:
-            st.warning("No documents selected. Select at least one to search.")
-
-        st.divider()
 
     # ── Active Configuration ──────────────────────────────────────────────────
     if config.BEST_CONFIG_PATH.exists():
@@ -454,6 +420,14 @@ with st.sidebar:
                 except Exception as e:
                     status.update(label=f"Indexing failed: {e}", state="error")
 
+    # ── Indexed Papers list ──────────────────────────────────────────────────
+    _sidebar_docs = _get_indexed_documents()
+    if _sidebar_docs:
+        st.divider()
+        st.subheader(f"📚 Indexed Papers ({len(_sidebar_docs)})")
+        for _doc in _sidebar_docs:
+            st.markdown(f"📄 {_doc['filename']}")
+
     # ── Web Search ────────────────────────────────────────────────────────────
     st.subheader("Live Web Search")
     from src.web_search import is_tavily_available
@@ -475,7 +449,25 @@ with st.sidebar:
         st.info("Add TAVILY_API_KEY to your .env to enable live web search.")
 
     st.divider()
-    if st.button("Clear This Chat", use_container_width=True):
+
+    # ── Retrieval Strategy Comparison ───────────────────────────────────────
+    st.subheader("🔍 Retrieval Comparison")
+    compare_mode = st.toggle(
+        "Compare retrieval strategies for this question",
+        value=st.session_state.compare_mode,
+        key="compare_mode_toggle",
+        help=(
+            "Run Dense, MMR, and Hybrid (BM25+Dense) retrievers against the same query and "
+            "show results side-by-side. No new embedding API calls — fast ANN/BM25 lookups only."
+        ),
+    )
+    st.session_state.compare_mode = compare_mode
+
+    if compare_mode:
+        st.caption("⏱️ Retrieval comparison will run after you submit your question.")
+
+    st.divider()
+    if st.button("Clear This Chat", width="stretch"):
         active_id = st.session_state.active_session_id
         if active_id in st.session_state.session_store["sessions"]:
             st.session_state.session_store["sessions"][active_id]["messages"] = []
@@ -495,7 +487,10 @@ active_sess = st.session_state.session_store["sessions"].get(
     st.session_state.active_session_id, {}
 )
 active_title = active_sess.get("title", "New Chat")
-st.caption(f"Session: **{active_title}** | Ask questions about your uploaded research papers & live web. Sources cited on every answer.")
+st.caption(
+    f"Session: **{active_title}** | Ask questions about your uploaded research papers & live web. "
+    "Sources cited on every answer."
+)
 
 # Load chain & vector store
 chain = None
@@ -536,47 +531,66 @@ for msg in active_messages:
                         if w.get("content"):
                             st.caption(w["content"][:200] + ("..." if len(w["content"]) > 200 else ""))
 
-# Warn if no documents selected
-no_docs_selected = (
-    st.session_state.selected_papers is not None
-    and len(st.session_state.selected_papers) == 0
-)
-
 # Chat input
-chat_disabled = chain is None or no_docs_selected
+chat_disabled = chain is None
 if prompt := st.chat_input(
-    "Ask about the papers..." if not no_docs_selected else "Select at least one document to search",
+    "Ask about the papers...",
     disabled=chat_disabled,
 ):
     if chain is None:
         st.warning("Upload a PDF first to build the index.")
         st.stop()
 
-    # Determine papers filter (None = all papers)
-    selected = st.session_state.selected_papers
-    indexed_titles = [d["title"] for d in _get_indexed_documents()]
-    # If all papers selected, pass None (no filter = faster)
-    paper_filter = None if (selected is None or set(selected) == set(indexed_titles)) else selected
-
-    # Show user message
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # Run chain
     with st.chat_message("assistant"):
         spinner_text = "Searching papers & live web..." if enable_web_search else "Thinking..."
+        if st.session_state.compare_mode:
+            spinner_text = "Comparing retrieval strategies..."
+
         with st.spinner(spinner_text):
-            from src.memory_chain import chat as mem_chat
-            llm_instance = _load_llm()
-            result = mem_chat(
-                chain,
-                st.session_state.lc_history,
-                prompt,
-                use_web_search=enable_web_search,
-                llm=llm_instance,
-                vectorstore=vectorstore,
-                selected_papers=paper_filter,
-            )
+            if st.session_state.compare_mode and vectorstore is not None:
+                from src.rag_chain import build_rag_chain, ask as rag_ask
+                from src.retrieval import build_dense_retriever, build_mmr_retriever, build_hybrid_retriever
+                llm_instance = _load_llm()
+                import json as _json
+                with open(config.BEST_CONFIG_PATH) as _f:
+                    _best_cfg = _json.load(_f)
+                _rname = _best_cfg.get("retrieval_strategy", "Dense")
+                if _rname == "MMR":
+                    _default_retriever = build_mmr_retriever(
+                        vectorstore, k=config.TOP_K,
+                        fetch_k=config.MMR_FETCH_K, lambda_mult=config.MMR_LAMBDA,
+                    )
+                elif "Hybrid" in _rname:
+                    _raw = vectorstore.get()
+                    from langchain_core.documents import Document as _Doc
+                    _chunks = [_Doc(page_content=p, metadata=m)
+                               for p, m in zip(_raw["documents"], _raw["metadatas"])]
+                    _default_retriever = build_hybrid_retriever(_chunks, vectorstore, k=config.TOP_K)
+                else:
+                    _default_retriever = build_dense_retriever(vectorstore, k=config.TOP_K)
+                _chain = build_rag_chain(_default_retriever, llm_instance)
+                result = rag_ask(
+                    _chain, _default_retriever, prompt,
+                    k=config.TOP_K, use_web_search=enable_web_search,
+                    llm=llm_instance, compare_mode=True,
+                    generate_per_strategy_answers=False, vectorstore=vectorstore,
+                )
+                result.setdefault("source_type", "papers")
+                result["chat_history"] = st.session_state.lc_history + [
+                    __import__("langchain_core.messages", fromlist=["HumanMessage"]).HumanMessage(content=prompt),
+                    __import__("langchain_core.messages", fromlist=["AIMessage"]).AIMessage(content=result["answer"]),
+                ]
+            else:
+                from src.memory_chain import chat as mem_chat
+                llm_instance = _load_llm()
+                result = mem_chat(
+                    chain, st.session_state.lc_history, prompt,
+                    use_web_search=enable_web_search,
+                    llm=llm_instance, vectorstore=vectorstore,
+                )
 
         answer      = result["answer"]
         sources     = result.get("sources", [])
@@ -603,14 +617,55 @@ if prompt := st.chat_input(
                     if w.get("content"):
                         st.caption(w["content"][:250] + ("..." if len(w["content"]) > 250 else ""))
 
-    # Persist turn to active session
+        comparison = result.get("comparison")
+        if comparison:
+            st.divider()
+            st.markdown("#### 🔄 Retrieval Strategy Comparison")
+            st.caption(
+                "Comparison of all three retrieval strategies for this question. "
+                "The best strategy is highlighted below the table."
+            )
+            _STRATEGY_META = {
+                "dense":  {"label": "🔵 Dense (Cosine)"},
+                "mmr":    {"label": "🟣 MMR"},
+                "hybrid": {"label": "🟢 Hybrid (BM25+Dense)"},
+            }
+            import pandas as _pd
+            table_rows = []
+            _score_map = {}
+            for strategy_key, meta in _STRATEGY_META.items():
+                data = comparison.get(strategy_key, {})
+                elapsed_ms = data.get("elapsed_s", 0) * 1000
+                chunks = data.get("chunks", [])
+                unique_pages = len({
+                    (c.get("paper_title", ""), c.get("page_number", ""))
+                    for c in chunks
+                })
+                scores = [c["score"] for c in chunks if c.get("score") is not None]
+                numeric_top = max(scores) if scores else 0.0
+                _score_map[strategy_key] = (numeric_top, len(chunks))
+                table_rows.append({
+                    "Strategy":         meta["label"],
+                    "Latency (ms)":     f"{elapsed_ms:.1f}",
+                    "Chunks Retrieved": len(chunks),
+                    "Unique Pages":     unique_pages,
+                    "Top Score":        f"{numeric_top:.3f}" if scores else "N/A",
+                })
+            cmp_df = _pd.DataFrame(table_rows).set_index("Strategy")
+            st.dataframe(cmp_df, width="stretch")
+            best_key = max(_score_map, key=lambda k: (_score_map[k][0], _score_map[k][1]))
+            best_label = _STRATEGY_META[best_key]["label"]
+            best_score, best_n = _score_map[best_key]
+            st.success(
+                f"**✅ Best Strategy: {best_label}** — "
+                f"Top Score: `{best_score:.3f}`  |  Chunks: `{best_n}`"
+            )
+
+    # Persist turn
     st.session_state.lc_history = result["chat_history"]
     active_id = st.session_state.active_session_id
     current_msgs = hist.get_session_messages(st.session_state.session_store, active_id)
-
-    # Auto-title session from first user message
     hist.auto_title_session(st.session_state.session_store, active_id, prompt)
-
     updated_msgs = hist.append_turn(current_msgs, "user", prompt)
     updated_msgs = hist.append_turn(
         updated_msgs, "assistant", answer,
